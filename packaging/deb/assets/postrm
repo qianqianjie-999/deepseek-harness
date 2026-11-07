@@ -1,0 +1,7 @@
+#!/bin/sh
+# User data under ~/.dsh is intentionally left in place on remove and purge.
+set -e
+if [ "${1:-}" = "purge" ]; then
+  echo "deepseek-harness-web: user data under ~/.dsh was kept; remove it manually if no longer needed"
+fi
+exit 0

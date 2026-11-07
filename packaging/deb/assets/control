@@ -1,0 +1,15 @@
+Package: deepseek-harness-web
+Version: __VERSION__
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libc6 (>= 2.34), ca-certificates
+Recommends: xdg-utils, libnotify-bin
+Installed-Size: __SIZE_KB__
+Maintainer: local build <local@localhost>
+Description: DeepSeek Harness Web UI and CLI (self-contained)
+ Bundles the built Web frontend, the CLI runtime tree and Node 24.
+ A desktop launcher is installed: search "DeepSeek Harness" in the
+ application menu to start the service and open it in a browser.
+ Alternatively run 'dsh-web start', then 'dsh-web url'.
+ The service listens on 127.0.0.1:3080 and requires the startup token.

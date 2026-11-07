@@ -1,0 +1,60 @@
+#!/bin/sh
+set -e
+command -v update-desktop-database >/dev/null 2>&1 && \
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+
+# postinst runs after dpkg has unpacked data.tar.xz. If that step was
+# truncated, the /usr/bin launchers are present but the runtime is not, and
+# the user only finds out later when the desktop icon fails with
+# "INCOMPLETE / bundled Node not found". Detect it here, at install time.
+# DSH_ROOT is overridable only so this check can be exercised in a fake root.
+DSH_ROOT="${DSH_ROOT:-/opt/deepseek-harness}"
+missing=""
+for rel in \
+  node24/bin/node \
+  node_modules/tsx/dist/esm/index.mjs \
+  apps/cli/src/bin.ts \
+  apps/web/dist/index.html
+do
+  [ -e "$DSH_ROOT/$rel" ] || missing="$missing  - $DSH_ROOT/$rel\n"
+done
+
+if [ -n "$missing" ]; then
+  cat >&2 <<'EOF'
+
+*** WARNING: deepseek-harness payload is INCOMPLETE ***
+The launcher scripts were installed, but files under /opt/deepseek-harness
+are missing. Starting the Web UI now WILL FAIL with "INCOMPLETE" or
+"bundled Node not found". Missing:
+EOF
+  printf '%b' "$missing" >&2
+  cat >&2 <<'EOF'
+Repair before clicking the icon (no full reinstall needed):
+  cd ~/deepseek-harness/dist-linux
+  df -h /opt
+  dpkg-deb --fsys-tarfile *.deb | sudo tar -x -C / ./opt/deepseek-harness
+  /opt/deepseek-harness/node24/bin/node --version   # v24.9.0
+
+Intentionally not failing the install: a half-configured dpkg state is
+worse than a loud warning when the payload can be repaired in place.
+EOF
+  exit 0
+fi
+
+cat <<'EOF'
+deepseek-harness-web installed under /opt/deepseek-harness (bundled Node 24).
+
+搜索应用菜单 "DeepSeek Harness"，点击图标即可启动服务并打开浏览器
+（右键图标可停止常驻服务）。若菜单未刷新，注销重登一次。
+
+命令行等价操作：
+  dsh-web start   start the Web UI in the background (127.0.0.1:3080)
+  dsh-web url     print the token-bearing URL; copy the whole line into a browser
+  dsh-web stop    stop it
+  dsh --help      CLI help
+
+The first start initialises ~/.dsh and can take tens of seconds.
+Plain http://127.0.0.1:3080/ returns 401 by design; the startup URL is required.
+EOF

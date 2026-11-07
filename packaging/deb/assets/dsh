@@ -1,0 +1,37 @@
+#!/bin/sh
+# DeepSeek Harness CLI launcher, installed as /usr/bin/dsh.
+# DSH_ROOT may be overridden to run from a source checkout without installing.
+set -e
+
+DSH_ROOT="${DSH_ROOT:-/opt/deepseek-harness}"
+NODE="${DSH_NODE:-$DSH_ROOT/node24/bin/node}"
+LOADER="$DSH_ROOT/node_modules/tsx/dist/esm/index.mjs"
+BIN="$DSH_ROOT/apps/cli/src/bin.ts"
+
+# Report every missing runtime piece at once, plus how to repair it. The
+# original check only named the Node binary, which hides the real cause: an
+# incomplete .deb unpack (disk full / interrupted install / manual cleanup).
+missing=""
+[ -x "$NODE" ] || missing="$missing  - $NODE (bundled Node 24)\n"
+[ -f "$LOADER" ] || missing="$missing  - $LOADER (tsx loader)\n"
+[ -f "$BIN" ] || missing="$missing  - $BIN (CLI entry)\n"
+[ -f "$DSH_ROOT/apps/web/dist/index.html" ] || \
+  missing="$missing  - $DSH_ROOT/apps/web/dist/index.html (Web frontend)\n"
+
+if [ -n "$missing" ]; then
+  echo "dsh: installation under $DSH_ROOT is INCOMPLETE; missing:" >&2
+  printf '%b' "$missing" >&2
+  echo "dsh: the .deb payload was not fully unpacked (disk full, interrupted" >&2
+  echo "     install, or files removed afterwards). Repair with EITHER:" >&2
+  echo "       sudo dpkg -i <deb>" >&2
+  echo "       dpkg-deb --fsys-tarfile <deb> | sudo tar -x -C / ./opt/deepseek-harness" >&2
+  echo "dsh: disk: $(df -h /opt 2>/dev/null | tail -n 1)" >&2
+  exit 1
+fi
+
+export PATH="$(dirname "$NODE"):$PATH"
+export DSH_HOME="${DSH_HOME:-${HOME:-/root}/.dsh}"
+
+# Use an absolute loader path: a bare `--import tsx/esm` resolves relative to
+# the current working directory, which would break `dsh` outside $DSH_ROOT.
+exec "$NODE" --import "$LOADER" "$BIN" "$@"

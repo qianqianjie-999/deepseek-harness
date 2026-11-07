@@ -1,0 +1,85 @@
+#!/bin/sh
+# Desktop launcher for the bundled DeepSeek Harness Web UI.
+#
+#   dsh-launch              start the service and open it in a browser
+#   dsh-launch --stop       stop the service (Desktop Action)
+#   dsh-launch --status     print service state
+#   dsh-launch --url        print the token-bearing URL
+#
+# The Web UI is authenticated: the root URL returns 401 until the browser
+# opens the token-bearing startup URL. Never open the bare 127.0.0.1:3080/.
+set -e
+# The app refuses a group/world-readable ~/.dsh/.credentials.yaml.
+umask 077
+
+DSH_WEB="${DSH_WEB:-/usr/bin/dsh-web}"
+DSH_HOME="${DSH_HOME:-${HOME:-/root}/.dsh}"
+URL_FILE="$DSH_HOME/last-url.txt"
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 || return 0
+  notify-send --app-name='DeepSeek Harness' "$1" "$2" 2>/dev/null || true
+}
+
+die() {
+  printf 'dsh-launch: %s\n' "$1" >&2
+  # A .desktop with Terminal=false discards stderr, so surface the real error
+  # in the notification and keep a copy on disk for later diagnosis.
+  mkdir -p "$DSH_HOME" 2>/dev/null || true
+  printf '%s\n' "$1" > "$DSH_HOME/launch-error.txt" 2>/dev/null || true
+  hint=""
+  if [ -f "$DSH_HOME/last-error.txt" ]; then
+    hint="$(grep -iE 'INCOMPLETE|EADDRINUSE|address already in use|Cannot|not found|failed|EACCES|ENOENT|占用' \
+      "$DSH_HOME/last-error.txt" | head -n 1 | cut -c1-140)"
+    [ -n "$hint" ] || hint="$(grep -iE 'error|dsh:' "$DSH_HOME/last-error.txt" | tail -n 1 | cut -c1-140)"
+  fi
+  notify 'DeepSeek Harness 启动失败' "${1}${hint:+ | $hint}"
+  exit 1
+}
+
+case "${1:-}" in
+  --stop|stop)
+    "$DSH_WEB" stop
+    notify 'DeepSeek Harness' 'Web 服务已停止'
+    exit 0
+    ;;
+  --status|status)
+    exec "$DSH_WEB" status
+    ;;
+  --url|url)
+    exec "$DSH_WEB" url
+    ;;
+  '') ;;
+  *)
+    printf 'Usage: dsh-launch [--stop | --status | --url]\n' >&2
+    exit 2
+    ;;
+esac
+
+notify 'DeepSeek Harness' '正在启动本地服务，首次启动约需 30–60 秒…'
+
+if ! OUT="$("$DSH_WEB" start 2>&1)"; then
+  printf '%s\n' "$OUT" >&2
+  die "服务启动失败，详见 $DSH_HOME/web.log"
+fi
+
+URL="$("$DSH_WEB" url 2>/dev/null)" || die "未取到启动 URL，详见 $DSH_HOME/web.log"
+[ -n "$URL" ] || die '启动 URL 为空'
+# Keep a copy so the user can recover the URL when no browser is associated.
+mkdir -p "$DSH_HOME"
+printf '%s\n' "$URL" > "$URL_FILE"
+chmod 600 "$URL_FILE" 2>/dev/null || true
+
+# Desktop environments kill the launcher's process group when it exits, so run
+# the opener detached; xdg-open is preferred, gio is the fallback.
+if command -v xdg-open >/dev/null 2>&1; then
+  ( xdg-open "$URL" >/dev/null 2>&1 || gio open "$URL" >/dev/null 2>&1 || true ) &
+elif command -v gio >/dev/null 2>&1; then
+  ( gio open "$URL" >/dev/null 2>&1 || true ) &
+else
+  die "未找到 xdg-open / gio；请手动运行 'dsh-web url' 并复制到浏览器"
+fi
+
+notify 'DeepSeek Harness' '服务已就绪；若浏览器未打开，运行 dsh-web url'
+printf '%s\n' "$URL"
+exit 0

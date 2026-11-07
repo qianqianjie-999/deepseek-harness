@@ -1,0 +1,121 @@
+#!/bin/sh
+# Manage the bundled DeepSeek Harness Web UI and retrieve its startup URL.
+# The Web UI requires authentication: the root URL returns 401 until the
+# browser opens the token-bearing URL printed at startup.
+set -e
+# The app refuses to start when ~/.dsh/.credentials.yaml is group/world readable.
+# A default umask of 022 would create it as 644, so tighten it for the service.
+umask 077
+
+DSH_ROOT="${DSH_ROOT:-/opt/deepseek-harness}"
+DSH_BIN="${DSH_BIN:-/usr/bin/dsh}"
+DSH_HOME="${DSH_HOME:-${HOME:-/root}/.dsh}"
+LOG="$DSH_HOME/web.log"
+PID="$DSH_HOME/web.pid"
+
+usage() {
+  cat <<'EOF'
+Usage: dsh-web <command>
+
+  start       start the Web UI in the background (127.0.0.1:3080)
+  stop        stop the background Web UI
+  status      show whether it is running
+  url         print the token-bearing startup URL (copy the whole line)
+  foreground  run in the foreground (same as `dsh web --no-open`)
+
+Overrides: DSH_ROOT, DSH_BIN, DSH_HOME.
+EOF
+}
+
+running() {
+  [ -f "$PID" ] && kill -0 "$(cat "$PID" 2>/dev/null)" 2>/dev/null
+}
+
+print_url() {
+  if [ ! -f "$LOG" ]; then
+    echo "dsh-web: no log at $LOG; run 'dsh-web start' first" >&2
+    return 1
+  fi
+  found=$(grep -oE 'https?://[^[:space:]]+[?&]token=[^[:space:]]+' "$LOG" | tail -n 1 || true)
+  if [ -z "$found" ]; then
+    echo "dsh-web: startup URL not in $LOG yet; check: tail -n 30 $LOG" >&2
+    return 1
+  fi
+  printf '%s\n' "$found"
+}
+
+case "${1:-}" in
+  start)
+    if running; then
+      echo "dsh-web: already running (pid $(cat "$PID"))"
+      print_url
+      exit 0
+    fi
+    mkdir -p "$DSH_HOME"
+    # A second click used to truncate the only evidence of the first failure.
+    # Rotate the previous log instead, then start with a fresh one.
+    if [ -f "$LOG" ]; then
+      mv -f "$LOG" "$LOG.1" 2>/dev/null || : > "$LOG"
+    fi
+    : > "$LOG"
+    # GNOME/KDE run .desktop entries in their own session/cgroup; a plain
+    # `nohup &` child can be reaped when the launcher exits. setsid detaches
+    # it so the icon can start a service that outlives the launcher.
+    if command -v setsid >/dev/null 2>&1; then
+      setsid nohup "$DSH_BIN" web --no-open </dev/null >>"$LOG" 2>&1 &
+    else
+      nohup "$DSH_BIN" web --no-open </dev/null >>"$LOG" 2>&1 &
+    fi
+    echo $! > "$PID"
+    i=0
+    while [ "$i" -lt 120 ]; do
+      if grep -q 'token=' "$LOG" 2>/dev/null; then break; fi
+      if ! kill -0 "$(cat "$PID")" 2>/dev/null; then
+        echo "dsh-web: process exited early; last log lines:" >&2
+        tail -n 20 "$LOG" >&2
+        tail -n 30 "$LOG" > "$DSH_HOME/last-error.txt" 2>/dev/null || true
+        if grep -qiE 'EADDRINUSE|address already in use' "$LOG"; then
+          echo "dsh-web: 端口 3080 已被占用；先停掉旧的 dsh web 进程再重试" >&2
+          echo "dsh-web: 端口 3080 已被占用；先停掉旧的 dsh web 进程再重试" >> "$DSH_HOME/last-error.txt"
+        fi
+        rm -f "$PID"
+        exit 1
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+    if ! grep -q 'token=' "$LOG" 2>/dev/null; then
+      echo "dsh-web: startup timed out after 120s; last log lines:" >&2
+      tail -n 20 "$LOG" >&2
+      tail -n 30 "$LOG" > "$DSH_HOME/last-error.txt" 2>/dev/null || true
+      exit 1
+    fi
+    echo "dsh-web: started (pid $(cat "$PID"))"
+    print_url || { echo "dsh-web: see $LOG" >&2; exit 1; }
+    echo "dsh-web: open the URL above in a browser; plain http://127.0.0.1:3080/ returns 401 by design"
+    ;;
+  stop)
+    if running; then
+      pid=$(cat "$PID")
+      kill "$pid" 2>/dev/null || true
+      j=0
+      while [ "$j" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+        j=$((j + 1)); sleep 1
+      done
+      echo "dsh-web: stopped (pid $pid)"
+    else
+      echo "dsh-web: not running"
+    fi
+    rm -f "$PID"
+    ;;
+  status)
+    if running; then
+      echo "dsh-web: running (pid $(cat "$PID")); log $LOG"
+    else
+      echo "dsh-web: stopped"
+    fi
+    ;;
+  url) print_url ;;
+  foreground|fg) exec "$DSH_BIN" web --no-open ;;
+  *) usage; exit 2 ;;
+esac
